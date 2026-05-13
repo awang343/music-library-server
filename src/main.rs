@@ -11,12 +11,22 @@ mod scanner;
 #[derive(Parser)]
 #[command(name = "music-lib", version, about = "Personal music library server")]
 struct Cli {
-    /// Path to config.toml
-    #[arg(short, long, default_value = "config.toml")]
-    config: PathBuf,
+    /// Path to config.toml. Defaults to $XDG_CONFIG_HOME/muserv/config.toml
+    /// (or ~/.config/muserv/config.toml).
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+fn default_config_path() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"));
+    base.join("muserv").join("config.toml")
 }
 
 #[derive(Subcommand)]
@@ -40,8 +50,9 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let cfg = config::Config::load(&cli.config)
-        .with_context(|| format!("loading config from {}", cli.config.display()))?;
+    let config_path = cli.config.unwrap_or_else(default_config_path);
+    let cfg = config::Config::load(&config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
     tracing::info!(?cfg, "loaded config");
 
     let pool = db::connect(&cfg.db_path).await?;
@@ -62,7 +73,7 @@ async fn main() -> Result<()> {
             {
                 tracing::warn!(bind = %cfg.bind, "auth_token is unset and bind is non-loopback — API is open");
             }
-            let router = api::router(pool, cfg.auth_token.clone());
+            let router = api::router(pool, cfg.auth_token.clone(), cfg.library_path.clone());
             let listener = tokio::net::TcpListener::bind(&cfg.bind)
                 .await
                 .with_context(|| format!("binding {}", cfg.bind))?;
