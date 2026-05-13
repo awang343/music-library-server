@@ -1,0 +1,15 @@
+# Copy to config.toml and edit.
+
+# Root of your music library. Scanned recursively.
+library_path = "/path/to/your/music"
+
+# Where the SQLite DB lives.
+db_path = "./data/music-lib.db"
+
+# HTTP bind address.
+bind = "127.0.0.1:7700"
+
+# Optional. If set, all /api/* routes require `Authorization: Bearer <token>`.
+# Required in practice for any non-loopback bind. Generate one with:
+#   openssl rand -hex 32
+# auth_token = "paste-a-long-random-string-here"
