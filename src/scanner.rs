@@ -3,9 +3,10 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use sqlx::SqlitePool;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use walkdir::WalkDir;
 
 const AUDIO_EXTS: &[&str] = &[
@@ -19,6 +20,7 @@ pub struct ScanStats {
     pub inserted: u64,
     pub updated: u64,
     pub unchanged: u64,
+    pub removed: u64,
     pub failed: u64,
     pub failures: Vec<ScanFailure>,
 }
@@ -31,6 +33,7 @@ pub struct ScanFailure {
 
 pub async fn scan(pool: &SqlitePool, root: &Path) -> Result<ScanStats> {
     let mut stats = ScanStats::default();
+    let mut seen_paths: HashSet<String> = HashSet::new();
 
     for entry in WalkDir::new(root).follow_links(true) {
         let entry = match entry {
@@ -56,6 +59,7 @@ pub async fn scan(pool: &SqlitePool, root: &Path) -> Result<ScanStats> {
         }
 
         stats.seen += 1;
+        seen_paths.insert(entry.path().to_string_lossy().to_string());
         match scan_one(pool, entry.path()).await {
             Ok(ScanResult::Inserted) => stats.inserted += 1,
             Ok(ScanResult::Updated) => stats.updated += 1,
@@ -71,15 +75,47 @@ pub async fn scan(pool: &SqlitePool, root: &Path) -> Result<ScanStats> {
         }
     }
 
+    stats.removed = remove_missing(pool, &seen_paths).await?;
+
     info!(
         seen = stats.seen,
         inserted = stats.inserted,
         updated = stats.updated,
         unchanged = stats.unchanged,
+        removed = stats.removed,
         failed = stats.failed,
         "scan complete"
     );
     Ok(stats)
+}
+
+/// Remove DB rows whose path was not encountered during this scan.
+/// Cascades clean up `track_tags` and `playlist_tracks` automatically.
+async fn remove_missing(pool: &SqlitePool, seen: &HashSet<String>) -> Result<u64> {
+    let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM tracks")
+        .fetch_all(pool)
+        .await?;
+
+    let to_remove: Vec<(i64, String)> = rows
+        .into_iter()
+        .filter(|(_, p)| !seen.contains(p))
+        .collect();
+
+    if to_remove.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
+    for (id, path) in &to_remove {
+        debug!(track_id = id, path = %path, "removing missing track");
+        sqlx::query("DELETE FROM tracks WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+
+    Ok(to_remove.len() as u64)
 }
 
 enum ScanResult {

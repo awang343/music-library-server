@@ -86,8 +86,8 @@ async fn main() -> Result<()> {
 
 fn print_scan_summary(stats: &scanner::ScanStats) {
     println!(
-        "scan: seen={} inserted={} updated={} unchanged={} failed={}",
-        stats.seen, stats.inserted, stats.updated, stats.unchanged, stats.failed,
+        "scan: seen={} inserted={} updated={} unchanged={} removed={} failed={}",
+        stats.seen, stats.inserted, stats.updated, stats.unchanged, stats.removed, stats.failed,
     );
     if !stats.failures.is_empty() {
         println!();

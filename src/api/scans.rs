@@ -22,6 +22,7 @@ pub struct ScanStatsView {
     pub inserted: u64,
     pub updated: u64,
     pub unchanged: u64,
+    pub removed: u64,
     pub failed: u64,
 }
 
@@ -32,6 +33,7 @@ impl From<&scanner::ScanStats> for ScanStatsView {
             inserted: s.inserted,
             updated: s.updated,
             unchanged: s.unchanged,
+            removed: s.removed,
             failed: s.failed,
         }
     }
