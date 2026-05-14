@@ -9,7 +9,7 @@ mod db;
 mod scanner;
 
 #[derive(Parser)]
-#[command(name = "music-lib", version, about = "Personal music library server")]
+#[command(name = "muserv", version, about = "Muserv: personal music library server")]
 struct Cli {
     /// Path to config.toml. Defaults to $XDG_CONFIG_HOME/muserv/config.toml
     /// (or ~/.config/muserv/config.toml).
@@ -45,7 +45,7 @@ enum Cmd {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,music_lib=debug")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,muserv=debug")),
         )
         .init();
 
