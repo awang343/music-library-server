@@ -11,12 +11,12 @@ pub fn routes() -> Router<SharedState> {
     Router::new()
         .route("/api/playlists", get(list).post(create))
         .route(
-            "/api/playlists/:id",
+            "/api/playlists/{id}",
             get(get_one).patch(update).delete(delete_one),
         )
-        .route("/api/playlists/:id/tracks", get(get_tracks).post(add_track).put(set_tracks))
+        .route("/api/playlists/{id}/tracks", get(get_tracks).post(add_track).put(set_tracks))
         .route(
-            "/api/playlists/:id/tracks/:track_id",
+            "/api/playlists/{id}/tracks/{track_id}",
             delete(remove_track),
         )
 }

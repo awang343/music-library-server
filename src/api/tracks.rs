@@ -9,7 +9,7 @@ use sqlx::FromRow;
 pub fn routes() -> Router<SharedState> {
     Router::new()
         .route("/api/tracks", get(list_tracks))
-        .route("/api/tracks/:id", get(get_track))
+        .route("/api/tracks/{id}", get(get_track))
         .route("/api/albums", get(list_albums))
         .route("/api/artists", get(list_artists))
 }

@@ -272,23 +272,23 @@ fn parse_file(path: &Path) -> Result<Parsed> {
 
     let tag = probe.primary_tag().or_else(|| probe.first_tag());
     if let Some(tag) = tag {
-        out.title = tag.get_string(&ItemKey::TrackTitle).map(str::to_owned);
-        out.album = tag.get_string(&ItemKey::AlbumTitle).map(str::to_owned);
-        out.artist = tag.get_string(&ItemKey::TrackArtist).map(str::to_owned);
-        out.album_artist = tag.get_string(&ItemKey::AlbumArtist).map(str::to_owned);
+        out.title = tag.get_string(ItemKey::TrackTitle).map(str::to_owned);
+        out.album = tag.get_string(ItemKey::AlbumTitle).map(str::to_owned);
+        out.artist = tag.get_string(ItemKey::TrackArtist).map(str::to_owned);
+        out.album_artist = tag.get_string(ItemKey::AlbumArtist).map(str::to_owned);
         out.track_no = tag
-            .get_string(&ItemKey::TrackNumber)
+            .get_string(ItemKey::TrackNumber)
             .and_then(|s| s.split('/').next())
             .and_then(|s| s.trim().parse().ok());
         out.disc_no = tag
-            .get_string(&ItemKey::DiscNumber)
+            .get_string(ItemKey::DiscNumber)
             .and_then(|s| s.split('/').next())
             .and_then(|s| s.trim().parse().ok());
         out.year = tag
-            .get_string(&ItemKey::Year)
+            .get_string(ItemKey::Year)
             .and_then(|s| s.trim().parse().ok())
             .or_else(|| {
-                tag.get_string(&ItemKey::RecordingDate)
+                tag.get_string(ItemKey::RecordingDate)
                     .and_then(|s| s.get(..4))
                     .and_then(|y| y.parse().ok())
             });
