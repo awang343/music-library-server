@@ -29,6 +29,7 @@ pub struct Track {
     pub bitrate: Option<i64>,
     pub sample_rate: Option<i64>,
     pub channels: Option<i64>,
+    pub added_at: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,7 +50,7 @@ async fn list_tracks(
 
     let mut sql = String::from(
         "SELECT id, path, title, album, artist, album_artist, track_no, disc_no, \
-         duration_ms, year, bitrate, sample_rate, channels FROM tracks WHERE 1=1",
+         duration_ms, year, bitrate, sample_rate, channels, added_at FROM tracks WHERE 1=1",
     );
     let mut binds: Vec<String> = Vec::new();
     if let Some(v) = &q.album {
@@ -80,7 +81,7 @@ async fn get_track(
 ) -> ApiResult<Json<Track>> {
     let row = sqlx::query_as::<_, Track>(
         "SELECT id, path, title, album, artist, album_artist, track_no, disc_no, \
-         duration_ms, year, bitrate, sample_rate, channels FROM tracks WHERE id = ?",
+         duration_ms, year, bitrate, sample_rate, channels, added_at FROM tracks WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.pool)

@@ -56,7 +56,7 @@ async fn search(
 
     let mut sql = String::from(
         "SELECT id, path, title, album, artist, album_artist, track_no, disc_no, \
-         duration_ms, year, bitrate, sample_rate, channels FROM tracks t WHERE 1=1",
+         duration_ms, year, bitrate, sample_rate, channels, added_at FROM tracks t WHERE 1=1",
     );
     let mut binds: Vec<String> = Vec::new();
 
