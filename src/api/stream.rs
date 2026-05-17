@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio_util::io::ReaderStream;
 
 pub fn routes() -> Router<SharedState> {
-    Router::new().route("/api/tracks/:id/stream", get(stream_track))
+    Router::new().route("/api/tracks/{id}/stream", get(stream_track))
 }
 
 async fn stream_track(

@@ -9,8 +9,8 @@ use sqlx::FromRow;
 
 pub fn routes() -> Router<SharedState> {
     Router::new()
-        .route("/api/tracks/:id/tags", get(list_track_tags).post(add_user_tag))
-        .route("/api/tracks/:id/tags/:tag_id", delete(remove_user_tag))
+        .route("/api/tracks/{id}/tags", get(list_track_tags).post(add_user_tag))
+        .route("/api/tracks/{id}/tags/{tag_id}", delete(remove_user_tag))
         .route("/api/tags", get(list_tags))
 }
 
