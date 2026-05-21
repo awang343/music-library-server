@@ -166,7 +166,7 @@ async fn scan_one(pool: &SqlitePool, library_id: i64, path: &Path) -> Result<Sca
     let now = chrono::Utc::now().timestamp();
     let mut tx = pool.begin().await?;
 
-    let track_id: i64 = sqlx::query_scalar(
+    sqlx::query(
         r#"
         INSERT INTO tracks (
             library_id, path, title, album, artist, album_artist,
@@ -189,7 +189,6 @@ async fn scan_one(pool: &SqlitePool, library_id: i64, path: &Path) -> Result<Sca
             file_size    = excluded.file_size,
             mtime        = excluded.mtime,
             updated_at   = excluded.updated_at
-        RETURNING id
         "#,
     )
     .bind(library_id)
@@ -209,37 +208,8 @@ async fn scan_one(pool: &SqlitePool, library_id: i64, path: &Path) -> Result<Sca
     .bind(mtime)
     .bind(now)
     .bind(now)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
-
-    // Wipe non-user tags for this track, then reinsert imported ones.
-    sqlx::query("DELETE FROM track_tags WHERE track_id = ? AND source != 'user'")
-        .bind(track_id)
-        .execute(&mut *tx)
-        .await?;
-
-    for (ns, val) in &parsed.tags {
-        let tag_id: i64 = sqlx::query_scalar(
-            r#"
-            INSERT INTO tags (namespace, value) VALUES (?, ?)
-            ON CONFLICT(namespace, value) DO UPDATE SET namespace = namespace
-            RETURNING id
-            "#,
-        )
-        .bind(ns)
-        .bind(val)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT OR IGNORE INTO track_tags (track_id, tag_id, source, added_at) VALUES (?, ?, 'file', ?)",
-        )
-        .bind(track_id)
-        .bind(tag_id)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-    }
 
     tx.commit().await?;
 
@@ -263,7 +233,6 @@ struct Parsed {
     bitrate: Option<i64>,
     sample_rate: Option<i64>,
     channels: Option<i64>,
-    tags: Vec<(String, String)>,
 }
 
 fn parse_file(path: &Path) -> Result<Parsed> {
@@ -303,20 +272,6 @@ fn parse_file(path: &Path) -> Result<Parsed> {
                     .and_then(|s| s.get(..4))
                     .and_then(|y| y.parse().ok())
             });
-
-        for item in tag.items() {
-            let ns: &'static str = match item.key() {
-                ItemKey::Genre => "genre",
-                ItemKey::Composer => "composer",
-                _ => continue,
-            };
-            if let Some(v) = item.value().text() {
-                let v = v.trim();
-                if !v.is_empty() {
-                    out.tags.push((ns.to_string(), v.to_string()));
-                }
-            }
-        }
     }
 
     Ok(out)

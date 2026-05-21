@@ -28,7 +28,6 @@ pub struct TrackTagRow {
     pub tag_id: i64,
     pub namespace: String,
     pub value: String,
-    pub source: String,
     pub added_at: i64,
 }
 
@@ -56,10 +55,10 @@ async fn list_track_tags(
 ) -> ApiResult<Json<Vec<TrackTagRow>>> {
     require_track_in_lib(&state, lib_id, id).await?;
     let rows = sqlx::query_as::<_, TrackTagRow>(
-        "SELECT t.id AS tag_id, t.namespace, t.value, tt.source, tt.added_at \
+        "SELECT t.id AS tag_id, t.namespace, t.value, tt.added_at \
          FROM track_tags tt JOIN tags t ON t.id = tt.tag_id \
          WHERE tt.track_id = ? \
-         ORDER BY t.namespace, t.value, tt.source",
+         ORDER BY t.namespace, t.value",
     )
     .bind(id)
     .fetch_all(&state.pool)
@@ -108,8 +107,7 @@ async fn add_user_tag(
     .await?;
 
     sqlx::query(
-        "INSERT OR IGNORE INTO track_tags (track_id, tag_id, source, added_at) \
-         VALUES (?, ?, 'user', ?)",
+        "INSERT OR IGNORE INTO track_tags (track_id, tag_id, added_at) VALUES (?, ?, ?)",
     )
     .bind(id)
     .bind(tag_id)
@@ -135,14 +133,14 @@ async fn remove_user_tag(
 ) -> ApiResult<StatusCode> {
     require_track_in_lib(&state, lib_id, track_id).await?;
     let res = sqlx::query(
-        "DELETE FROM track_tags WHERE track_id = ? AND tag_id = ? AND source = 'user'",
+        "DELETE FROM track_tags WHERE track_id = ? AND tag_id = ?",
     )
     .bind(track_id)
     .bind(tag_id)
     .execute(&state.pool)
     .await?;
     if res.rows_affected() == 0 {
-        return Err(ApiError::not_found("user tag on track"));
+        return Err(ApiError::not_found("tag on track"));
     }
     Ok(StatusCode::NO_CONTENT)
 }
