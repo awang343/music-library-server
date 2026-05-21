@@ -95,7 +95,8 @@ def restore(
     if dash_count == 0:
         return "no-dash"
 
-    if dash_count == 1:
+    ambiguous = dash_count > 1
+    if not ambiguous:
         parsed = split_on(stem, True)
     else:
         if ambiguous_mode == "first":
@@ -119,8 +120,11 @@ def restore(
     have_title = bool(f.get("title"))
     have_artist = bool(f.get("artist"))
 
-    write_title = overwrite or not have_title
-    write_artist = overwrite or not have_artist
+    # Ambiguous files always overwrite — the user (or --ambiguous policy)
+    # made an explicit choice, so honor it regardless of existing tags.
+    force = overwrite or ambiguous
+    write_title = force or not have_title
+    write_artist = force or not have_artist
 
     if not write_title and not write_artist:
         return "already-set"
