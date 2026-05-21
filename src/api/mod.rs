@@ -1,8 +1,11 @@
+use crate::api::error::{ApiError, ApiResult};
+use crate::libraries::Library;
+use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
 use sqlx::SqlitePool;
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -20,27 +23,45 @@ pub mod tracks;
 pub struct AppState {
     pub pool: SqlitePool,
     pub auth_token: Option<String>,
-    pub library_path: PathBuf,
-    pub scan_state: Arc<Mutex<scans::ScanState>>,
+    pub libraries: Vec<Library>,
+    pub scan_states: Arc<Mutex<HashMap<i64, scans::ScanState>>>,
 }
 
 pub type SharedState = Arc<AppState>;
 
-pub fn router(pool: SqlitePool, auth_token: Option<String>, library_path: PathBuf) -> Router {
+impl AppState {
+    /// Resolve a library id from the URL and return a clone of the Library row.
+    /// Returns a 404 if the id is not configured.
+    pub fn require_library(&self, id: i64) -> Result<Library, ApiError> {
+        self.libraries
+            .iter()
+            .find(|l| l.id == id)
+            .cloned()
+            .ok_or_else(|| ApiError::not_found("library"))
+    }
+}
+
+pub fn router(pool: SqlitePool, auth_token: Option<String>, libraries: Vec<Library>) -> Router {
     let state = Arc::new(AppState {
         pool,
         auth_token,
-        library_path,
-        scan_state: Arc::new(Mutex::new(scans::ScanState::default())),
+        libraries,
+        scan_states: Arc::new(Mutex::new(HashMap::new())),
     });
 
-    let protected = Router::new()
+    let library_scoped = Router::new()
         .merge(tracks::routes())
-        .merge(stream::routes())
-        .merge(tags::routes())
+        .merge(tags::library_routes())
         .merge(search::routes())
         .merge(playlists::routes())
-        .merge(scans::routes())
+        .merge(scans::routes());
+
+    let protected = Router::new()
+        .route("/api/libraries", get(list_libraries))
+        .route("/api/libraries/{lib_id}", get(get_library))
+        .nest("/api/libraries/{lib_id}", library_scoped)
+        .merge(stream::routes())
+        .merge(tags::global_routes())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,
@@ -54,4 +75,15 @@ pub fn router(pool: SqlitePool, auth_token: Option<String>, library_path: PathBu
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+}
+
+async fn list_libraries(State(state): State<SharedState>) -> Json<Vec<Library>> {
+    Json(state.libraries.clone())
+}
+
+async fn get_library(
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Library>> {
+    Ok(Json(state.require_library(id)?))
 }

@@ -9,14 +9,17 @@ use sqlx::FromRow;
 
 pub fn routes() -> Router<SharedState> {
     Router::new()
-        .route("/api/playlists", get(list).post(create))
+        .route("/playlists", get(list).post(create))
         .route(
-            "/api/playlists/{id}",
+            "/playlists/{id}",
             get(get_one).patch(update).delete(delete_one),
         )
-        .route("/api/playlists/{id}/tracks", get(get_tracks).post(add_track).put(set_tracks))
         .route(
-            "/api/playlists/{id}/tracks/{track_id}",
+            "/playlists/{id}/tracks",
+            get(get_tracks).post(add_track).put(set_tracks),
+        )
+        .route(
+            "/playlists/{id}/tracks/{track_id}",
             delete(remove_track),
         )
 }
@@ -24,6 +27,7 @@ pub fn routes() -> Router<SharedState> {
 #[derive(Debug, Serialize, FromRow)]
 pub struct PlaylistSummary {
     pub id: i64,
+    pub library_id: i64,
     pub name: String,
     pub description: Option<String>,
     pub track_count: i64,
@@ -34,6 +38,7 @@ pub struct PlaylistSummary {
 #[derive(Debug, Serialize, FromRow)]
 pub struct PlaylistRow {
     pub id: i64,
+    pub library_id: i64,
     pub name: String,
     pub description: Option<String>,
     pub created_at: i64,
@@ -81,13 +86,18 @@ pub struct SetTracksBody {
     pub track_ids: Vec<i64>,
 }
 
-async fn list(State(state): State<SharedState>) -> ApiResult<Json<Vec<PlaylistSummary>>> {
+async fn list(
+    State(state): State<SharedState>,
+    Path(lib_id): Path<i64>,
+) -> ApiResult<Json<Vec<PlaylistSummary>>> {
+    state.require_library(lib_id)?;
     let rows = sqlx::query_as::<_, PlaylistSummary>(
-        "SELECT p.id, p.name, p.description, \
+        "SELECT p.id, p.library_id, p.name, p.description, \
          COALESCE((SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id), 0) AS track_count, \
          p.created_at, p.updated_at \
-         FROM playlists p ORDER BY p.name",
+         FROM playlists p WHERE p.library_id = ? ORDER BY p.name",
     )
+    .bind(lib_id)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))
@@ -95,18 +105,21 @@ async fn list(State(state): State<SharedState>) -> ApiResult<Json<Vec<PlaylistSu
 
 async fn create(
     State(state): State<SharedState>,
+    Path(lib_id): Path<i64>,
     Json(body): Json<NewPlaylist>,
 ) -> ApiResult<(StatusCode, Json<PlaylistRow>)> {
+    state.require_library(lib_id)?;
     let name = body.name.trim();
     if name.is_empty() {
         return Err(ApiError::bad_request("name must be non-empty"));
     }
     let now = chrono::Utc::now().timestamp();
     let row = sqlx::query_as::<_, PlaylistRow>(
-        "INSERT INTO playlists (name, description, created_at, updated_at) \
-         VALUES (?, ?, ?, ?) \
-         RETURNING id, name, description, created_at, updated_at",
+        "INSERT INTO playlists (library_id, name, description, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?) \
+         RETURNING id, library_id, name, description, created_at, updated_at",
     )
+    .bind(lib_id)
     .bind(name)
     .bind(body.description.as_deref())
     .bind(now)
@@ -119,11 +132,14 @@ async fn create(
 
 async fn get_one(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<PlaylistWithTracks>> {
+    state.require_library(lib_id)?;
     let playlist = sqlx::query_as::<_, PlaylistRow>(
-        "SELECT id, name, description, created_at, updated_at FROM playlists WHERE id = ?",
+        "SELECT id, library_id, name, description, created_at, updated_at \
+         FROM playlists WHERE library_id = ? AND id = ?",
     )
+    .bind(lib_id)
     .bind(id)
     .fetch_optional(&state.pool)
     .await?
@@ -135,12 +151,15 @@ async fn get_one(
 
 async fn get_tracks(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<Vec<PlaylistTrack>>> {
-    let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM playlists WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?;
+    state.require_library(lib_id)?;
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM playlists WHERE library_id = ? AND id = ?")
+            .bind(lib_id)
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
     if exists.is_none() {
         return Err(ApiError::not_found("playlist"));
     }
@@ -166,20 +185,22 @@ async fn fetch_playlist_tracks(
 
 async fn update(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
     Json(body): Json<PatchPlaylist>,
 ) -> ApiResult<Json<PlaylistRow>> {
+    state.require_library(lib_id)?;
     let name = body.name.trim();
     if name.is_empty() {
         return Err(ApiError::bad_request("name must be non-empty"));
     }
     let now = chrono::Utc::now().timestamp();
     let row = sqlx::query_as::<_, PlaylistRow>(
-        "UPDATE playlists SET name = ?, updated_at = ? WHERE id = ? \
-         RETURNING id, name, description, created_at, updated_at",
+        "UPDATE playlists SET name = ?, updated_at = ? WHERE library_id = ? AND id = ? \
+         RETURNING id, library_id, name, description, created_at, updated_at",
     )
     .bind(name)
     .bind(now)
+    .bind(lib_id)
     .bind(id)
     .fetch_optional(&state.pool)
     .await
@@ -190,9 +211,11 @@ async fn update(
 
 async fn delete_one(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<StatusCode> {
-    let res = sqlx::query("DELETE FROM playlists WHERE id = ?")
+    state.require_library(lib_id)?;
+    let res = sqlx::query("DELETE FROM playlists WHERE library_id = ? AND id = ?")
+        .bind(lib_id)
         .bind(id)
         .execute(&state.pool)
         .await?;
@@ -204,23 +227,28 @@ async fn delete_one(
 
 async fn add_track(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
     Json(body): Json<AddTrackBody>,
 ) -> ApiResult<StatusCode> {
+    state.require_library(lib_id)?;
     let now = chrono::Utc::now().timestamp();
     let mut tx = state.pool.begin().await?;
 
-    let pl_exists: Option<i64> = sqlx::query_scalar("SELECT id FROM playlists WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let pl_exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM playlists WHERE library_id = ? AND id = ?")
+            .bind(lib_id)
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
     if pl_exists.is_none() {
         return Err(ApiError::not_found("playlist"));
     }
-    let tr_exists: Option<i64> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?")
-        .bind(body.track_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let tr_exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM tracks WHERE library_id = ? AND id = ?")
+            .bind(lib_id)
+            .bind(body.track_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     if tr_exists.is_none() {
         return Err(ApiError::not_found("track"));
     }
@@ -255,10 +283,20 @@ async fn add_track(
 
 async fn remove_track(
     State(state): State<SharedState>,
-    Path((id, track_id)): Path<(i64, i64)>,
+    Path((lib_id, id, track_id)): Path<(i64, i64, i64)>,
 ) -> ApiResult<StatusCode> {
+    state.require_library(lib_id)?;
     let now = chrono::Utc::now().timestamp();
     let mut tx = state.pool.begin().await?;
+    let pl_exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM playlists WHERE library_id = ? AND id = ?")
+            .bind(lib_id)
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if pl_exists.is_none() {
+        return Err(ApiError::not_found("playlist"));
+    }
     let res = sqlx::query(
         "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
     )
@@ -280,16 +318,19 @@ async fn remove_track(
 
 async fn set_tracks(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
     Json(body): Json<SetTracksBody>,
 ) -> ApiResult<StatusCode> {
+    state.require_library(lib_id)?;
     let now = chrono::Utc::now().timestamp();
     let mut tx = state.pool.begin().await?;
 
-    let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM playlists WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM playlists WHERE library_id = ? AND id = ?")
+            .bind(lib_id)
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
     if exists.is_none() {
         return Err(ApiError::not_found("playlist"));
     }
@@ -301,6 +342,25 @@ async fn set_tracks(
             return Err(ApiError::bad_request(format!(
                 "duplicate track_id {tid} in track_ids"
             )));
+        }
+    }
+
+    // Confirm every supplied track belongs to this library — playlists cannot
+    // cross libraries.
+    if !body.track_ids.is_empty() {
+        let placeholders = vec!["?"; body.track_ids.len()].join(",");
+        let sql = format!(
+            "SELECT COUNT(*) FROM tracks WHERE library_id = ? AND id IN ({placeholders})"
+        );
+        let mut q = sqlx::query_scalar::<_, i64>(&sql).bind(lib_id);
+        for tid in &body.track_ids {
+            q = q.bind(*tid);
+        }
+        let count: i64 = q.fetch_one(&mut *tx).await?;
+        if (count as usize) != body.track_ids.len() {
+            return Err(ApiError::bad_request(
+                "one or more track_ids do not belong to this library",
+            ));
         }
     }
 
@@ -343,7 +403,7 @@ async fn set_tracks(
 fn map_unique(e: sqlx::Error) -> ApiError {
     if let sqlx::Error::Database(ref db) = e {
         if db.is_unique_violation() {
-            return ApiError::bad_request("playlist name already exists");
+            return ApiError::bad_request("playlist name already exists in this library");
         }
     }
     e.into()

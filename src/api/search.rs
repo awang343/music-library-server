@@ -1,13 +1,13 @@
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::tracks::Track;
 use crate::api::SharedState;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 
 pub fn routes() -> Router<SharedState> {
-    Router::new().route("/api/search", get(search))
+    Router::new().route("/search", get(search))
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,8 +44,10 @@ fn parse_query(q: &str) -> Result<Vec<Token<'_>>, ApiError> {
 
 async fn search(
     State(state): State<SharedState>,
+    Path(lib_id): Path<i64>,
     Query(q): Query<SearchQuery>,
 ) -> ApiResult<Json<Vec<Track>>> {
+    state.require_library(lib_id)?;
     let limit = q.limit.unwrap_or(100).clamp(1, 1000);
     let offset = q.offset.unwrap_or(0).max(0);
 
@@ -55,8 +57,9 @@ async fn search(
     }
 
     let mut sql = String::from(
-        "SELECT id, path, title, album, artist, album_artist, track_no, disc_no, \
-         duration_ms, year, bitrate, sample_rate, channels, added_at FROM tracks t WHERE 1=1",
+        "SELECT id, library_id, path, title, album, artist, album_artist, track_no, disc_no, \
+         duration_ms, year, bitrate, sample_rate, channels, added_at \
+         FROM tracks t WHERE library_id = ?",
     );
     let mut binds: Vec<String> = Vec::new();
 
@@ -76,7 +79,7 @@ async fn search(
 
     sql.push_str(" ORDER BY album_artist, album, disc_no, track_no, title LIMIT ? OFFSET ?");
 
-    let mut query = sqlx::query_as::<_, Track>(&sql);
+    let mut query = sqlx::query_as::<_, Track>(&sql).bind(lib_id);
     for b in &binds {
         query = query.bind(b);
     }

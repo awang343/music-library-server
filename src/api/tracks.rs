@@ -8,15 +8,16 @@ use sqlx::FromRow;
 
 pub fn routes() -> Router<SharedState> {
     Router::new()
-        .route("/api/tracks", get(list_tracks))
-        .route("/api/tracks/{id}", get(get_track))
-        .route("/api/albums", get(list_albums))
-        .route("/api/artists", get(list_artists))
+        .route("/tracks", get(list_tracks))
+        .route("/tracks/{id}", get(get_track))
+        .route("/albums", get(list_albums))
+        .route("/artists", get(list_artists))
 }
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct Track {
     pub id: i64,
+    pub library_id: i64,
     pub path: String,
     pub title: Option<String>,
     pub album: Option<String>,
@@ -32,6 +33,10 @@ pub struct Track {
     pub added_at: i64,
 }
 
+const TRACK_COLS: &str = "id, library_id, path, title, album, artist, album_artist, \
+                          track_no, disc_no, duration_ms, year, bitrate, sample_rate, \
+                          channels, added_at";
+
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     pub limit: Option<i64>,
@@ -43,15 +48,14 @@ pub struct ListQuery {
 
 async fn list_tracks(
     State(state): State<SharedState>,
+    Path(lib_id): Path<i64>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Track>>> {
+    state.require_library(lib_id)?;
     let limit = q.limit.unwrap_or(100).clamp(1, 1000);
     let offset = q.offset.unwrap_or(0).max(0);
 
-    let mut sql = String::from(
-        "SELECT id, path, title, album, artist, album_artist, track_no, disc_no, \
-         duration_ms, year, bitrate, sample_rate, channels, added_at FROM tracks WHERE 1=1",
-    );
+    let mut sql = format!("SELECT {TRACK_COLS} FROM tracks WHERE library_id = ?");
     let mut binds: Vec<String> = Vec::new();
     if let Some(v) = &q.album {
         sql.push_str(" AND album = ?");
@@ -67,7 +71,7 @@ async fn list_tracks(
     }
     sql.push_str(" ORDER BY album_artist, album, disc_no, track_no, title LIMIT ? OFFSET ?");
 
-    let mut q = sqlx::query_as::<_, Track>(&sql);
+    let mut q = sqlx::query_as::<_, Track>(&sql).bind(lib_id);
     for b in &binds {
         q = q.bind(b);
     }
@@ -77,12 +81,13 @@ async fn list_tracks(
 
 async fn get_track(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<Track>> {
-    let row = sqlx::query_as::<_, Track>(
-        "SELECT id, path, title, album, artist, album_artist, track_no, disc_no, \
-         duration_ms, year, bitrate, sample_rate, channels, added_at FROM tracks WHERE id = ?",
-    )
+    state.require_library(lib_id)?;
+    let row = sqlx::query_as::<_, Track>(&format!(
+        "SELECT {TRACK_COLS} FROM tracks WHERE library_id = ? AND id = ?"
+    ))
+    .bind(lib_id)
     .bind(id)
     .fetch_optional(&state.pool)
     .await?
@@ -98,12 +103,17 @@ pub struct AlbumRow {
     pub track_count: i64,
 }
 
-async fn list_albums(State(state): State<SharedState>) -> ApiResult<Json<Vec<AlbumRow>>> {
+async fn list_albums(
+    State(state): State<SharedState>,
+    Path(lib_id): Path<i64>,
+) -> ApiResult<Json<Vec<AlbumRow>>> {
+    state.require_library(lib_id)?;
     let rows = sqlx::query_as::<_, AlbumRow>(
         "SELECT album, album_artist, MIN(year) AS year, COUNT(*) AS track_count \
-         FROM tracks WHERE album IS NOT NULL \
+         FROM tracks WHERE library_id = ? AND album IS NOT NULL \
          GROUP BY album, album_artist ORDER BY album_artist, album",
     )
+    .bind(lib_id)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))
@@ -115,11 +125,16 @@ pub struct ArtistRow {
     pub track_count: i64,
 }
 
-async fn list_artists(State(state): State<SharedState>) -> ApiResult<Json<Vec<ArtistRow>>> {
+async fn list_artists(
+    State(state): State<SharedState>,
+    Path(lib_id): Path<i64>,
+) -> ApiResult<Json<Vec<ArtistRow>>> {
+    let _ = state.require_library(lib_id)?;
     let rows = sqlx::query_as::<_, ArtistRow>(
         "SELECT artist, COUNT(*) AS track_count FROM tracks \
-         WHERE artist IS NOT NULL GROUP BY artist ORDER BY artist",
+         WHERE library_id = ? AND artist IS NOT NULL GROUP BY artist ORDER BY artist",
     )
+    .bind(lib_id)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))

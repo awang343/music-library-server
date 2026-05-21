@@ -31,7 +31,7 @@ pub struct ScanFailure {
     pub reason: String,
 }
 
-pub async fn scan(pool: &SqlitePool, root: &Path) -> Result<ScanStats> {
+pub async fn scan(pool: &SqlitePool, library_id: i64, root: &Path) -> Result<ScanStats> {
     let mut stats = ScanStats::default();
     let mut seen_paths: HashSet<String> = HashSet::new();
 
@@ -60,7 +60,7 @@ pub async fn scan(pool: &SqlitePool, root: &Path) -> Result<ScanStats> {
 
         stats.seen += 1;
         seen_paths.insert(entry.path().to_string_lossy().to_string());
-        match scan_one(pool, entry.path()).await {
+        match scan_one(pool, library_id, entry.path()).await {
             Ok(ScanResult::Inserted) => stats.inserted += 1,
             Ok(ScanResult::Updated) => stats.updated += 1,
             Ok(ScanResult::Unchanged) => stats.unchanged += 1,
@@ -75,7 +75,7 @@ pub async fn scan(pool: &SqlitePool, root: &Path) -> Result<ScanStats> {
         }
     }
 
-    stats.removed = remove_missing(pool, &seen_paths).await?;
+    stats.removed = remove_missing(pool, library_id, &seen_paths).await?;
 
     info!(
         seen = stats.seen,
@@ -90,11 +90,19 @@ pub async fn scan(pool: &SqlitePool, root: &Path) -> Result<ScanStats> {
 }
 
 /// Remove DB rows whose path was not encountered during this scan.
-/// Cascades clean up `track_tags` and `playlist_tracks` automatically.
-async fn remove_missing(pool: &SqlitePool, seen: &HashSet<String>) -> Result<u64> {
-    let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, path FROM tracks")
-        .fetch_all(pool)
-        .await?;
+/// Scoped to the given library so a partial scan of one library never deletes
+/// rows belonging to another. Cascades clean up `track_tags` and
+/// `playlist_tracks` automatically.
+async fn remove_missing(
+    pool: &SqlitePool,
+    library_id: i64,
+    seen: &HashSet<String>,
+) -> Result<u64> {
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, path FROM tracks WHERE library_id = ?")
+            .bind(library_id)
+            .fetch_all(pool)
+            .await?;
 
     let to_remove: Vec<(i64, String)> = rows
         .into_iter()
@@ -124,7 +132,7 @@ enum ScanResult {
     Unchanged,
 }
 
-async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<ScanResult> {
+async fn scan_one(pool: &SqlitePool, library_id: i64, path: &Path) -> Result<ScanResult> {
     let meta = std::fs::metadata(path).context("stat")?;
     let file_size = meta.len() as i64;
     let mtime = meta
@@ -135,11 +143,13 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<ScanResult> {
         .as_secs() as i64;
     let path_str = path.to_string_lossy().to_string();
 
-    let existing: Option<(i64, i64, i64)> =
-        sqlx::query_as("SELECT id, mtime, file_size FROM tracks WHERE path = ?")
-            .bind(&path_str)
-            .fetch_optional(pool)
-            .await?;
+    let existing: Option<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, mtime, file_size FROM tracks WHERE library_id = ? AND path = ?",
+    )
+    .bind(library_id)
+    .bind(&path_str)
+    .fetch_optional(pool)
+    .await?;
 
     let existed = existing.is_some();
     if let Some((_, exist_mtime, exist_size)) = existing {
@@ -159,12 +169,12 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<ScanResult> {
     let track_id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO tracks (
-            path, title, album, artist, album_artist,
+            library_id, path, title, album, artist, album_artist,
             track_no, disc_no, duration_ms, year,
             bitrate, sample_rate, channels,
             file_size, mtime, added_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(path) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(library_id, path) DO UPDATE SET
             title        = excluded.title,
             album        = excluded.album,
             artist       = excluded.artist,
@@ -182,6 +192,7 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<ScanResult> {
         RETURNING id
         "#,
     )
+    .bind(library_id)
     .bind(&path_str)
     .bind(&parsed.title)
     .bind(&parsed.album)

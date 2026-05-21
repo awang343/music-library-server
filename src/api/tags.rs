@@ -7,11 +7,20 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-pub fn routes() -> Router<SharedState> {
+/// Routes nested under /api/libraries/{lib_id}.
+pub fn library_routes() -> Router<SharedState> {
     Router::new()
-        .route("/api/tracks/{id}/tags", get(list_track_tags).post(add_user_tag))
-        .route("/api/tracks/{id}/tags/{tag_id}", delete(remove_user_tag))
-        .route("/api/tags", get(list_tags))
+        .route(
+            "/tracks/{id}/tags",
+            get(list_track_tags).post(add_user_tag),
+        )
+        .route("/tracks/{id}/tags/{tag_id}", delete(remove_user_tag))
+        .route("/tags", get(list_tags_in_library))
+}
+
+/// Routes that are not per-library.
+pub fn global_routes() -> Router<SharedState> {
+    Router::new().route("/api/tags", get(list_tags_global))
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -23,10 +32,29 @@ pub struct TrackTagRow {
     pub added_at: i64,
 }
 
+async fn require_track_in_lib(
+    state: &SharedState,
+    lib_id: i64,
+    track_id: i64,
+) -> Result<(), ApiError> {
+    state.require_library(lib_id)?;
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM tracks WHERE library_id = ? AND id = ?")
+            .bind(lib_id)
+            .bind(track_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if exists.is_none() {
+        return Err(ApiError::not_found("track"));
+    }
+    Ok(())
+}
+
 async fn list_track_tags(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<Vec<TrackTagRow>>> {
+    require_track_in_lib(&state, lib_id, id).await?;
     let rows = sqlx::query_as::<_, TrackTagRow>(
         "SELECT t.id AS tag_id, t.namespace, t.value, tt.source, tt.added_at \
          FROM track_tags tt JOIN tags t ON t.id = tt.tag_id \
@@ -54,22 +82,14 @@ pub struct AddedTag {
 
 async fn add_user_tag(
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
+    Path((lib_id, id)): Path<(i64, i64)>,
     Json(body): Json<NewTag>,
 ) -> ApiResult<(StatusCode, Json<AddedTag>)> {
+    require_track_in_lib(&state, lib_id, id).await?;
     let namespace = body.namespace.trim();
     let value = body.value.trim();
     if value.is_empty() {
         return Err(ApiError::bad_request("value must be non-empty"));
-    }
-
-    // Confirm the track exists.
-    let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?;
-    if exists.is_none() {
-        return Err(ApiError::not_found("track"));
     }
 
     let now = chrono::Utc::now().timestamp();
@@ -111,8 +131,9 @@ async fn add_user_tag(
 
 async fn remove_user_tag(
     State(state): State<SharedState>,
-    Path((track_id, tag_id)): Path<(i64, i64)>,
+    Path((lib_id, track_id, tag_id)): Path<(i64, i64, i64)>,
 ) -> ApiResult<StatusCode> {
+    require_track_in_lib(&state, lib_id, track_id).await?;
     let res = sqlx::query(
         "DELETE FROM track_tags WHERE track_id = ? AND tag_id = ? AND source = 'user'",
     )
@@ -134,7 +155,25 @@ pub struct TagCount {
     pub track_count: i64,
 }
 
-async fn list_tags(State(state): State<SharedState>) -> ApiResult<Json<Vec<TagCount>>> {
+async fn list_tags_in_library(
+    State(state): State<SharedState>,
+    Path(lib_id): Path<i64>,
+) -> ApiResult<Json<Vec<TagCount>>> {
+    state.require_library(lib_id)?;
+    let rows = sqlx::query_as::<_, TagCount>(
+        "SELECT t.id AS tag_id, t.namespace, t.value, COUNT(DISTINCT tt.track_id) AS track_count \
+         FROM tags t JOIN track_tags tt ON tt.tag_id = t.id \
+         JOIN tracks tr ON tr.id = tt.track_id \
+         WHERE tr.library_id = ? \
+         GROUP BY t.id ORDER BY track_count DESC, t.namespace, t.value",
+    )
+    .bind(lib_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+async fn list_tags_global(State(state): State<SharedState>) -> ApiResult<Json<Vec<TagCount>>> {
     let rows = sqlx::query_as::<_, TagCount>(
         "SELECT t.id AS tag_id, t.namespace, t.value, COUNT(DISTINCT tt.track_id) AS track_count \
          FROM tags t LEFT JOIN track_tags tt ON tt.tag_id = t.id \

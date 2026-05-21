@@ -1,8 +1,5 @@
 # Copy to config.toml and edit.
 
-# Root of your music library. Scanned recursively.
-library_path = "/path/to/your/music"
-
 # Where the SQLite DB lives.
 db_path = "./data/music-lib.db"
 
@@ -13,3 +10,13 @@ bind = "127.0.0.1:7700"
 # Required in practice for any non-loopback bind. Generate one with:
 #   openssl rand -hex 32
 # auth_token = "paste-a-long-random-string-here"
+
+# One or more libraries. Names must be unique and are user-visible. Paths are
+# scanned recursively. The order here controls the default sort in clients.
+[[library]]
+name = "main"
+path = "/path/to/your/music"
+
+# [[library]]
+# name = "podcasts"
+# path = "/path/to/your/podcasts"
