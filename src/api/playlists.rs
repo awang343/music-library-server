@@ -22,6 +22,10 @@ pub fn routes() -> Router<SharedState> {
             "/playlists/{id}/tracks/{track_id}",
             delete(remove_track),
         )
+        .route(
+            "/tracks/{track_id}/playlists",
+            get(list_containing_track),
+        )
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -164,6 +168,33 @@ async fn get_tracks(
         return Err(ApiError::not_found("playlist"));
     }
     Ok(Json(fetch_playlist_tracks(&state, id).await?))
+}
+
+async fn list_containing_track(
+    State(state): State<SharedState>,
+    Path((lib_id, track_id)): Path<(i64, i64)>,
+) -> ApiResult<Json<Vec<i64>>> {
+    state.require_library(lib_id)?;
+    let tr_exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM tracks WHERE library_id = ? AND id = ?")
+            .bind(lib_id)
+            .bind(track_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if tr_exists.is_none() {
+        return Err(ApiError::not_found("track"));
+    }
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT p.id FROM playlists p \
+         JOIN playlist_tracks pt ON pt.playlist_id = p.id \
+         WHERE p.library_id = ? AND pt.track_id = ? \
+         ORDER BY p.id",
+    )
+    .bind(lib_id)
+    .bind(track_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(ids))
 }
 
 async fn fetch_playlist_tracks(
